@@ -1,0 +1,26 @@
+{
+  "name": "arbitrage-evm",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/QuenumGerald/Arbitrage-evm.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/QuenumGerald/Arbitrage-evm/issues"
+  },
+  "homepage": "https://github.com/QuenumGerald/Arbitrage-evm#readme",
+  "devDependencies": {
+    "dotenv": "^16.5.0",
+    "ethers": "^6.14.0",
+    "hardhat": "^2.23.0",
+    "ts-node": "^10.9.2"
+  }
+}
