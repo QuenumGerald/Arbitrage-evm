@@ -56,7 +56,7 @@ const PAIRS: Pair[] = [
 ];
 
 const FEE = 3000; // 0.3% pool
-const MIN_NET_PROFIT = 0.003; // 0.1% net
+const MIN_NET_PROFIT = 0.001; // 0.1% net
 const FLASHLOAN_FEE = 0.0009; // 0.09% (Aave v3 typical)
 const GAS_COST_USD = 0.5; // Approximate, can be refined
 
@@ -141,32 +141,42 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
       console.log(`[${base}/${quote}] Impossible de comparer les deux DEXs (un seul prix dispo).`);
       continue;
     }
-    const spread = (uniPrice - sushiPrice) / sushiPrice;
-    const reverseSpread = (sushiPrice - uniPrice) / uniPrice;
+    // Debug: log all prices
+    console.log(`[DEBUG] ${base}/${quote} | uniPrice: ${uniPrice}, sushiPrice: ${sushiPrice}`);
 
-    const flashloanFee = FLASHLOAN_FEE;
-    const gasCost = GAS_COST_USD;
-    const initialAmount = 1;
-    const amountFromUni = uniPrice * initialAmount;
-    const backFromSushi = amountFromUni / sushiPrice;
-    const netProfit = (backFromSushi - initialAmount) / initialAmount - flashloanFee - (gasCost / (uniPrice * initialAmount));
+    // Always interpret prices as QUOTE per BASE
+    // Simulate arbitrage: start with 1 BASE, swap to QUOTE on DEX1, swap back to BASE on DEX2
+    // Direction 1: Uniswap -> SushiSwap
+    const baseStart = 1;
+    const quoteFromUni = baseStart * uniPrice;
+    const baseBackFromSushi = quoteFromUni / sushiPrice;
+    const grossProfit1 = baseBackFromSushi - baseStart;
+    // Fees: flashloan (as fraction of baseStart), gas (in base units, approximated)
+    const netProfit1 = grossProfit1 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (uniPrice * baseStart));
+    console.log(`[DEBUG] ${base}/${quote} | [Uni->Sushi] baseStart: ${baseStart}, quoteFromUni: ${quoteFromUni}, baseBackFromSushi: ${baseBackFromSushi}, grossProfit: ${grossProfit1}, netProfit: ${netProfit1}`);
 
-    const amountFromSushi = sushiPrice * initialAmount;
-    const backFromUni = amountFromSushi / uniPrice;
-    const netProfitReverse = (backFromUni - initialAmount) / initialAmount - flashloanFee - (gasCost / (sushiPrice * initialAmount));
+    // Direction 2: SushiSwap -> Uniswap
+    const quoteFromSushi = baseStart * sushiPrice;
+    const baseBackFromUni = quoteFromSushi / uniPrice;
+    const grossProfit2 = baseBackFromUni - baseStart;
+    const netProfit2 = grossProfit2 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (sushiPrice * baseStart));
+    console.log(`[DEBUG] ${base}/${quote} | [Sushi->Uni] baseStart: ${baseStart}, quoteFromSushi: ${quoteFromSushi}, baseBackFromUni: ${baseBackFromUni}, grossProfit: ${grossProfit2}, netProfit: ${netProfit2}`);
 
-    if (netProfit > MIN_NET_PROFIT) {
-      const msg = `[OPPORTUNITY] ${base}/${quote} Uniswap -> SushiSwap | Net Profit: ${(netProfit * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
+    // Spread calculation (for info)
+    const spread = Math.abs(uniPrice - sushiPrice) / ((uniPrice + sushiPrice) / 2);
+
+    if (netProfit1 > MIN_NET_PROFIT) {
+      const msg = `[OPPORTUNITY] ${base}/${quote} Uniswap -> SushiSwap | Net Profit: ${(netProfit1 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
-    if (netProfitReverse > MIN_NET_PROFIT) {
-      const msg = `[OPPORTUNITY] ${base}/${quote} SushiSwap -> Uniswap | Net Profit: ${(netProfitReverse * 100).toFixed(3)}% | Spread: ${(reverseSpread * 100).toFixed(3)}%`;
+    if (netProfit2 > MIN_NET_PROFIT) {
+      const msg = `[OPPORTUNITY] ${base}/${quote} SushiSwap -> Uniswap | Net Profit: ${(netProfit2 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
-    if (netProfit <= MIN_NET_PROFIT && netProfitReverse <= MIN_NET_PROFIT) {
-      console.log(`[${base}/${quote}] No arbitrage opportunity > 0.5% net detected.`);
+    if (netProfit1 <= MIN_NET_PROFIT && netProfit2 <= MIN_NET_PROFIT) {
+      console.log(`[${base}/${quote}] No arbitrage opportunity > ${MIN_NET_PROFIT * 100}% net detected.`);
     }
   }
 }
