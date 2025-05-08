@@ -25,17 +25,14 @@ const TOKENS: { [symbol: string]: string } = {
 
 type Pair = { base: string; quote: string };
 const PAIRS: Pair[] = [
-  { base: "USDC", quote: "WETH" },
-  { base: "USDCe", quote: "WETH" },
-  { base: "USDT", quote: "WETH" },
-  { base: "DAI", quote: "WETH" },
+
   { base: "WBTC", quote: "WETH" },
-  { base: "ARB", quote: "WETH" },
-  { base: "LINK", quote: "WETH" },
+
+
   { base: "MAGIC", quote: "WETH" },
-  { base: "GMX", quote: "WETH" },
+
   { base: "UNI", quote: "WETH" },
-  { base: "SUSHI", quote: "WETH" },
+
   // Cross-stable and volume pairs
   { base: "USDC", quote: "USDCe" },
   { base: "USDC", quote: "USDT" },
@@ -44,12 +41,12 @@ const PAIRS: Pair[] = [
   { base: "USDCe", quote: "DAI" },
   // Optionally: USDC/token, USDCe/token for ARB, LINK, WBTC, UNI, SUSHI etc.
   { base: "USDC", quote: "ARB" },
-  { base: "USDC", quote: "LINK" },
+
   { base: "USDC", quote: "WBTC" },
   { base: "USDC", quote: "UNI" },
   { base: "USDC", quote: "SUSHI" },
   { base: "USDCe", quote: "ARB" },
-  { base: "USDCe", quote: "LINK" },
+
   { base: "USDCe", quote: "WBTC" },
   { base: "USDCe", quote: "UNI" },
   { base: "USDCe", quote: "SUSHI" }
@@ -93,19 +90,18 @@ async function getPoolPrice(provider: ethers.providers.Provider, pool: string) {
     decimals0 = await contract.provider.call({ to: token0, data: '0x313ce567' }).then(x => parseInt(x.slice(-64), 16));
     decimals1 = await contract.provider.call({ to: token1, data: '0x313ce567' }).then(x => parseInt(x.slice(-64), 16));
   } catch { }
-  // Normalize price to 1 WETH = X stable (if token0 is WETH, invert)
+  // Debug: log token0/token1 and decimals
+  console.log(`[DEBUG][getPoolPrice] token0: ${token0}, token1: ${token1}, decimals0: ${decimals0}, decimals1: ${decimals1}`);
   let price: number;
   if (decimals0 && decimals1) {
     price = Number(priceRaw.toString()) / 10 ** decimals1;
   } else {
     price = Number(priceRaw.toString()) / 1e18;
   }
-  // If token0 is WETH, invert price
-  const WETH = "0x82af49447d8a07e3bd95bd0d56f35241523fbab1".toLowerCase();
-  if (token0.toLowerCase() === WETH) {
-    price = 1 / price;
-  }
-  return { token0, token1, price };
+  // Always return price as QUOTE per BASE
+  // If token0 matches the BASE (see scanArbitrage), invert price so that price = quote per base
+  // We'll pass base/quote to this function for clarity
+  return { token0, token1, price, decimals0, decimals1 };
 }
 
 import { logToFile } from "./arbitrage-logger.js"; // <- Utilise le JS compilé (CommonJS)
@@ -113,22 +109,32 @@ import { logToFile } from "./arbitrage-logger.js"; // <- Utilise le JS compilé 
 async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[]) {
   for (const { base, quote } of pairs) {
     let uniPrice = 0, sushiPrice = 0;
+    let uniInfo = null, sushiInfo = null;
     try {
       const poolUni = await getPoolAddress(provider, FACTORY_ADDRESSES.uniswap, TOKENS[base], TOKENS[quote], FEE);
-      const { price } = await getPoolPrice(provider, poolUni);
-      uniPrice = price;
+      uniInfo = await getPoolPrice(provider, poolUni);
+      uniPrice = uniInfo.price;
     } catch (e) {
       console.error(`Uniswap error (${base}/${quote}):`, e);
     }
     try {
       const poolSushi = await getPoolAddress(provider, FACTORY_ADDRESSES.sushiswap, TOKENS[base], TOKENS[quote], FEE);
-      const { price } = await getPoolPrice(provider, poolSushi);
-      sushiPrice = price;
+      sushiInfo = await getPoolPrice(provider, poolSushi);
+      sushiPrice = sushiInfo.price;
     } catch (e) {
       console.error(`SushiSwap error (${base}/${quote}):`, e);
     }
+    // Sanity checks for price values
     if (!uniPrice && !sushiPrice) {
       console.log(`[${base}/${quote}] No price data available`);
+      continue;
+    }
+    if (uniPrice <= 0 || sushiPrice <= 0 || isNaN(uniPrice) || isNaN(sushiPrice)) {
+      console.warn(`[${base}/${quote}] Invalid price(s) detected: uniPrice=${uniPrice}, sushiPrice=${sushiPrice}`);
+      continue;
+    }
+    if (uniPrice > 1e12 || sushiPrice > 1e12) {
+      console.warn(`[${base}/${quote}] Suspiciously large price(s): uniPrice=${uniPrice}, sushiPrice=${sushiPrice}`);
       continue;
     }
     if (uniPrice) {
@@ -141,7 +147,10 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
       console.log(`[${base}/${quote}] Impossible de comparer les deux DEXs (un seul prix dispo).`);
       continue;
     }
-    // Debug: log all prices
+    // Debug: log all prices and tokens
+    if (uniInfo && sushiInfo) {
+      console.log(`[DEBUG] ${base}/${quote} | Uniswap token0: ${uniInfo.token0}, token1: ${uniInfo.token1}, Sushi token0: ${sushiInfo.token0}, token1: ${sushiInfo.token1}`);
+    }
     console.log(`[DEBUG] ${base}/${quote} | uniPrice: ${uniPrice}, sushiPrice: ${sushiPrice}`);
 
     // Always interpret prices as QUOTE per BASE
@@ -152,30 +161,40 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
     const baseBackFromSushi = quoteFromUni / sushiPrice;
     const grossProfit1 = baseBackFromSushi - baseStart;
     // Fees: flashloan (as fraction of baseStart), gas (in base units, approximated)
-    const netProfit1 = grossProfit1 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (uniPrice * baseStart));
+    let netProfit1 = null;
+    if (uniPrice > 0) {
+      netProfit1 = grossProfit1 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (uniPrice * baseStart));
+    } else {
+      netProfit1 = NaN;
+    }
     console.log(`[DEBUG] ${base}/${quote} | [Uni->Sushi] baseStart: ${baseStart}, quoteFromUni: ${quoteFromUni}, baseBackFromSushi: ${baseBackFromSushi}, grossProfit: ${grossProfit1}, netProfit: ${netProfit1}`);
 
     // Direction 2: SushiSwap -> Uniswap
     const quoteFromSushi = baseStart * sushiPrice;
     const baseBackFromUni = quoteFromSushi / uniPrice;
     const grossProfit2 = baseBackFromUni - baseStart;
-    const netProfit2 = grossProfit2 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (sushiPrice * baseStart));
+    let netProfit2 = null;
+    if (sushiPrice > 0) {
+      netProfit2 = grossProfit2 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (sushiPrice * baseStart));
+    } else {
+      netProfit2 = NaN;
+    }
     console.log(`[DEBUG] ${base}/${quote} | [Sushi->Uni] baseStart: ${baseStart}, quoteFromSushi: ${quoteFromSushi}, baseBackFromUni: ${baseBackFromUni}, grossProfit: ${grossProfit2}, netProfit: ${netProfit2}`);
 
     // Spread calculation (for info)
     const spread = Math.abs(uniPrice - sushiPrice) / ((uniPrice + sushiPrice) / 2);
 
-    if (netProfit1 > MIN_NET_PROFIT) {
+    if (!isNaN(netProfit1) && netProfit1 > MIN_NET_PROFIT) {
       const msg = `[OPPORTUNITY] ${base}/${quote} Uniswap -> SushiSwap | Net Profit: ${(netProfit1 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
-    if (netProfit2 > MIN_NET_PROFIT) {
+    if (!isNaN(netProfit2) && netProfit2 > MIN_NET_PROFIT) {
       const msg = `[OPPORTUNITY] ${base}/${quote} SushiSwap -> Uniswap | Net Profit: ${(netProfit2 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
-    if (netProfit1 <= MIN_NET_PROFIT && netProfit2 <= MIN_NET_PROFIT) {
+    if ((isNaN(netProfit1) || netProfit1 <= MIN_NET_PROFIT) && (isNaN(netProfit2) || netProfit2 <= MIN_NET_PROFIT)) {
       console.log(`[${base}/${quote}] No arbitrage opportunity > ${MIN_NET_PROFIT * 100}% net detected.`);
     }
   }
@@ -209,8 +228,20 @@ async function main() {
   const existingPairs = await filterExistingPairs(wsProvider, PAIRS);
   console.log(`Paires existantes détectées (${existingPairs.length}) :`, existingPairs);
   wsProvider.on("block", async (blockNumber) => {
-    console.log();
-    await scanArbitrage(wsProvider, existingPairs);
+    console.log(`[TICK] Nouveau bloc détecté: ${blockNumber}`);
+    try {
+      await scanArbitrage(wsProvider, existingPairs);
+    } catch (err) {
+      console.error(`[ERROR] Exception during scanArbitrage:`, err);
+    }
+  });
+
+  // Gestion d'erreur globale
+  process.on('uncaughtException', (err) => {
+    console.error('[FATAL] Uncaught Exception:', err);
+  });
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[FATAL] Unhandled Rejection:', reason);
   });
 }
 
