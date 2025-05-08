@@ -5,17 +5,24 @@ dotenv.config();
 // --- Addresses ---
 const FACTORY_ADDRESSES = {
   uniswap: "0x1F98431c8aD98523631AE4a59f267346ea31F984", // Uniswap V3 Factory
-  sushiswap: "0x1af415a1EbA07a4986a52B6f2e7dE7003D82231e" // SushiSwap V3 Factory (Arbitrum, checksum)
+  pancakeswap: "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865" // PancakeSwap V3 Factory (Arbitrum, correct address)
 };
 
 const TOKENS: { [symbol: string]: string } = {
   USDC: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
   USDCe: "0xFF970A61A04b1cA14834A43f5dE4533eBDDB5CC8", // bridged USDC (checksum)
-  USDT: "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9",
+  USDT: "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9",
   DAI: "0xda10009cbd5d07dd0cecc66161fc93d7c9000da1",
-  WETH: "0x82af49447d8a07e3bd95bd0d56f35241523fbab1",
-  WBTC: "0x2f2a2543b76a4166549f7aaab2e75b4cfc3cfbdb",
+  WETH: "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
+  WBTC: "0x2f2a2543b76a4166549f7aaab2e75b4cba5edac9",
   ARB: "0x912CE59144191C1204E64559FE8253a0e49E6548",
+  cbBTC: "0xcBb7C0000aB88b473b1F5AFd9Ef808440eEd33bF", // Coinbase Wrapped BTC
+  axlUSDC: "0xeb466342c4d449bc9f53a865d5cb90586f405215", // Axelar USDC
+  SOL: "0x2bcC6D6CdBbDC0a4071e48bb3B969b06B3330c07", // Wormhole SOL (à vérifier)
+  AAVE: "0x76fb31fb4af56892a25e32cfc43de717950c9278", // AAVE
+  KIMA: "0x94fcd9c18f99538c0f7c61c5500ca79f0d5c4dab", // KIMA (à vérifier)
+  USDe: "0x3a9A81d576d83ff21f26f325066054540720fc34", // Ethena USDe
+  SQD: "0x1337420ded5adb9980cfc35f8f2b054ea86f8ab1", // SQD (à vérifier)
   LINK: "0xf97f4df75117a78c1A5a0DBb814Af92458539FB4",
   MAGIC: "0x539bdE0d7Dbd336b79148AA742883198BBF60342",
   GMX: "0xfc5A1A6EB076a2C7aD06eD22C90d7E710E35ad0a",
@@ -25,37 +32,85 @@ const TOKENS: { [symbol: string]: string } = {
 
 type Pair = { base: string; quote: string };
 const PAIRS: Pair[] = [
-
-  { base: "WBTC", quote: "WETH" },
-
-
-  { base: "MAGIC", quote: "WETH" },
-
-  { base: "UNI", quote: "WETH" },
-
-  // Cross-stable and volume pairs
-  { base: "USDC", quote: "USDCe" },
-  { base: "USDC", quote: "USDT" },
-  { base: "USDC", quote: "DAI" },
-  { base: "USDCe", quote: "USDT" },
-  { base: "USDCe", quote: "DAI" },
-  // Optionally: USDC/token, USDCe/token for ARB, LINK, WBTC, UNI, SUSHI etc.
-  { base: "USDC", quote: "ARB" },
-
-  { base: "USDC", quote: "WBTC" },
-  { base: "USDC", quote: "UNI" },
-  { base: "USDC", quote: "SUSHI" },
-  { base: "USDCe", quote: "ARB" },
-
-  { base: "USDCe", quote: "WBTC" },
-  { base: "USDCe", quote: "UNI" },
-  { base: "USDCe", quote: "SUSHI" }
+  // Paires blue chips communes PancakeSwap/Uniswap à surveiller
+  { base: "WETH", quote: "USDC" }, // ETH/USDC
+  { base: "WBTC", quote: "WETH" }, // WBTC/ETH
+  { base: "WETH", quote: "USDT" }, // ETH/USDT
+  { base: "USDC", quote: "USDT" }, // USDC/USDT
+  { base: "WBTC", quote: "USDC" }, // WBTC/USDC
+  { base: "WETH", quote: "ARB" }, // ETH/ARB
+  { base: "WBTC", quote: "USDT" }, // WBTC/USDT
+  { base: "WETH", quote: "AAVE" }, // ETH/AAVE
+  { base: "USDC", quote: "DAI" }, // USDC/DAI
 ];
 
+// Mapping pour prioriser le fee tier optimal par paire sur PancakeSwap
+const PANCAKE_PAIR_FEE_TIERS: { [key: string]: number[] } = {
+  "WETH/USDC": [100, 500],
+  "WBTC/WETH": [100],
+  "WETH/USDT": [100, 500],
+  "USDC/USDT": [100],
+  "WBTC/USDC": [500, 100],
+  "WETH/ARB": [100],
+  "WBTC/USDT": [100],
+  "WETH/AAVE": [500],
+  "USDC/DAI": [100],
+};
+
 const FEE = 3000; // 0.3% pool
+const PANCAKE_FEE_TIERS = [100, 500, 2500, 3000, 10000]; // 0.01%, 0.05%, 0.25%, 0.3%, 1%
+const UNISWAP_FEE_TIERS = [500, 3000, 10000]; // 0.05%, 0.3%, 1%
 const MIN_NET_PROFIT = 0.001; // 0.1% net
 const FLASHLOAN_FEE = 0.0009; // 0.09% (Aave v3 typical)
 const GAS_COST_USD = 0.5; // Approximate, can be refined
+
+// Mapping pour prioriser le fee tier optimal par paire sur Uniswap (optionnel, sinon fallback sur UNISWAP_FEE_TIERS)
+const UNISWAP_PAIR_FEE_TIERS: { [key: string]: number[] } = {
+  "WETH/USDC": [500, 3000],
+  "WBTC/WETH": [500, 3000],
+  "WETH/USDT": [500, 3000],
+  "USDC/USDT": [500, 3000],
+  "WBTC/USDC": [500, 3000],
+  "WETH/ARB": [500, 3000],
+  "WBTC/USDT": [500, 3000],
+  "WETH/AAVE": [3000],
+  "USDC/DAI": [500, 3000],
+};
+
+// Recherche le fee tier optimal défini pour la paire sur Uniswap, sinon fallback sur tous les tiers
+async function getFirstAvailableUniswapPool(provider: ethers.providers.Provider, factory: string, tokenA: string, tokenB: string) {
+  const key1 = `${tokenA}/${tokenB}`;
+  const key2 = `${tokenB}/${tokenA}`;
+  let prioritizedFees: number[] = [];
+  if (UNISWAP_PAIR_FEE_TIERS[key1]) prioritizedFees = UNISWAP_PAIR_FEE_TIERS[key1];
+  else if (UNISWAP_PAIR_FEE_TIERS[key2]) prioritizedFees = UNISWAP_PAIR_FEE_TIERS[key2];
+  const feeTiers = prioritizedFees.length > 0 ? prioritizedFees : UNISWAP_FEE_TIERS;
+  for (const fee of feeTiers) {
+    try {
+      const pool = await getPoolAddress(provider, factory, tokenA, tokenB, fee);
+      if (pool) return { pool, fee };
+    } catch { }
+  }
+  return { pool: null, fee: null };
+}
+
+// Try all PancakeSwap fee tiers and return the first available pool
+// Recherche le fee tier optimal défini pour la paire, sinon fallback sur tous les tiers
+async function getFirstAvailablePool(provider: ethers.providers.Provider, factory: string, tokenA: string, tokenB: string) {
+  const key1 = `${tokenA}/${tokenB}`;
+  const key2 = `${tokenB}/${tokenA}`;
+  let prioritizedFees: number[] = [];
+  if (PANCAKE_PAIR_FEE_TIERS[key1]) prioritizedFees = PANCAKE_PAIR_FEE_TIERS[key1];
+  else if (PANCAKE_PAIR_FEE_TIERS[key2]) prioritizedFees = PANCAKE_PAIR_FEE_TIERS[key2];
+  const feeTiers = prioritizedFees.length > 0 ? prioritizedFees : PANCAKE_FEE_TIERS;
+  for (const fee of feeTiers) {
+    try {
+      const pool = await getPoolAddress(provider, factory, tokenA, tokenB, fee);
+      if (pool) return { pool, fee };
+    } catch { }
+  }
+  return { pool: null, fee: null };
+}
 
 const FACTORY_ABI = [
   "function getPool(address tokenA, address tokenB, uint24 fee) external view returns (address pool)"
@@ -108,57 +163,59 @@ import { logToFile } from "./arbitrage-logger.js"; // <- Utilise le JS compilé 
 
 async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[]) {
   for (const { base, quote } of pairs) {
-    let uniPrice = 0, sushiPrice = 0;
-    let uniInfo = null, sushiInfo = null;
+    let uniPrice = 0, pancakePrice = 0;
+    let uniInfo = null, pancakeInfo = null;
     try {
-      const poolUni = await getPoolAddress(provider, FACTORY_ADDRESSES.uniswap, TOKENS[base], TOKENS[quote], FEE);
+      const { pool: poolUni, fee: uniFee } = await getFirstAvailableUniswapPool(provider, FACTORY_ADDRESSES.uniswap, TOKENS[base], TOKENS[quote]);
+      if (!poolUni) throw new Error('No Uniswap V3 pool found');
       uniInfo = await getPoolPrice(provider, poolUni);
       uniPrice = uniInfo.price;
     } catch (e) {
       console.error(`Uniswap error (${base}/${quote}):`, e);
     }
     try {
-      const poolSushi = await getPoolAddress(provider, FACTORY_ADDRESSES.sushiswap, TOKENS[base], TOKENS[quote], FEE);
-      sushiInfo = await getPoolPrice(provider, poolSushi);
-      sushiPrice = sushiInfo.price;
+      const { pool: poolPancake, fee: pancakeFee } = await getFirstAvailablePool(provider, FACTORY_ADDRESSES.pancakeswap, TOKENS[base], TOKENS[quote]);
+      if (!poolPancake) throw new Error("No pool found");
+      pancakeInfo = await getPoolPrice(provider, poolPancake);
+      pancakePrice = pancakeInfo.price;
     } catch (e) {
-      console.error(`SushiSwap error (${base}/${quote}):`, e);
+      console.error(`PancakeSwap error (${base}/${quote}):`, e);
     }
     // Sanity checks for price values
-    if (!uniPrice && !sushiPrice) {
+    if (!uniPrice && !pancakePrice) {
       console.log(`[${base}/${quote}] No price data available`);
       continue;
     }
-    if (uniPrice <= 0 || sushiPrice <= 0 || isNaN(uniPrice) || isNaN(sushiPrice)) {
-      console.warn(`[${base}/${quote}] Invalid price(s) detected: uniPrice=${uniPrice}, sushiPrice=${sushiPrice}`);
+    if (uniPrice <= 0 || pancakePrice <= 0 || isNaN(uniPrice) || isNaN(pancakePrice)) {
+      console.warn(`[${base}/${quote}] Invalid price(s) detected: uniPrice=${uniPrice}, pancakePrice=${pancakePrice}`);
       continue;
     }
-    if (uniPrice > 1e12 || sushiPrice > 1e12) {
-      console.warn(`[${base}/${quote}] Suspiciously large price(s): uniPrice=${uniPrice}, sushiPrice=${sushiPrice}`);
+    if (uniPrice > 1e12 || pancakePrice > 1e12) {
+      console.warn(`[${base}/${quote}] Suspiciously large price(s): uniPrice=${uniPrice}, pancakePrice=${pancakePrice}`);
       continue;
     }
     if (uniPrice) {
       console.log(`[${base}/${quote}] Uniswap price: ${uniPrice}`);
     }
-    if (sushiPrice) {
-      console.log(`[${base}/${quote}] SushiSwap price: ${sushiPrice}`);
+    if (pancakePrice) {
+      console.log(`[${base}/${quote}] SushiSwap price: ${pancakePrice}`);
     }
-    if (!uniPrice || !sushiPrice) {
+    if (!uniPrice || !pancakePrice) {
       console.log(`[${base}/${quote}] Impossible de comparer les deux DEXs (un seul prix dispo).`);
       continue;
     }
     // Debug: log all prices and tokens
-    if (uniInfo && sushiInfo) {
-      console.log(`[DEBUG] ${base}/${quote} | Uniswap token0: ${uniInfo.token0}, token1: ${uniInfo.token1}, Sushi token0: ${sushiInfo.token0}, token1: ${sushiInfo.token1}`);
+    if (uniInfo && pancakeInfo) {
+      console.log(`[DEBUG] ${base}/${quote} | Uniswap token0: ${uniInfo.token0}, token1: ${uniInfo.token1}, Pancake token0: ${pancakeInfo.token0}, token1: ${pancakeInfo.token1}`);
     }
-    console.log(`[DEBUG] ${base}/${quote} | uniPrice: ${uniPrice}, sushiPrice: ${sushiPrice}`);
+    console.log(`[DEBUG] ${base}/${quote} | uniPrice: ${uniPrice}, pancakePrice: ${pancakePrice}`);
 
     // Always interpret prices as QUOTE per BASE
     // Simulate arbitrage: start with 1 BASE, swap to QUOTE on DEX1, swap back to BASE on DEX2
-    // Direction 1: Uniswap -> SushiSwap
+    // Direction 1: Uniswap -> PancakeSwap
     const baseStart = 1;
     const quoteFromUni = baseStart * uniPrice;
-    const baseBackFromSushi = quoteFromUni / sushiPrice;
+    const baseBackFromSushi = quoteFromUni / pancakePrice;
     const grossProfit1 = baseBackFromSushi - baseStart;
     // Fees: flashloan (as fraction of baseStart), gas (in base units, approximated)
     let netProfit1 = null;
@@ -167,30 +224,30 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
     } else {
       netProfit1 = NaN;
     }
-    console.log(`[DEBUG] ${base}/${quote} | [Uni->Sushi] baseStart: ${baseStart}, quoteFromUni: ${quoteFromUni}, baseBackFromSushi: ${baseBackFromSushi}, grossProfit: ${grossProfit1}, netProfit: ${netProfit1}`);
+    console.log(`[DEBUG] ${base}/${quote} | [Uni->Pancake] baseStart: ${baseStart}, quoteFromUni: ${quoteFromUni}, grossProfit: ${grossProfit1}, netProfit: ${netProfit1}`);
 
-    // Direction 2: SushiSwap -> Uniswap
-    const quoteFromSushi = baseStart * sushiPrice;
-    const baseBackFromUni = quoteFromSushi / uniPrice;
+    // Direction 2: PancakeSwap -> Uniswap
+    const quoteFromPancake = baseStart * pancakePrice;
+    const baseBackFromUni = quoteFromPancake / uniPrice;
     const grossProfit2 = baseBackFromUni - baseStart;
     let netProfit2 = null;
-    if (sushiPrice > 0) {
-      netProfit2 = grossProfit2 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (sushiPrice * baseStart));
+    if (pancakePrice > 0) {
+      netProfit2 = grossProfit2 - (baseStart * FLASHLOAN_FEE) - (GAS_COST_USD / (pancakePrice * baseStart));
     } else {
       netProfit2 = NaN;
     }
-    console.log(`[DEBUG] ${base}/${quote} | [Sushi->Uni] baseStart: ${baseStart}, quoteFromSushi: ${quoteFromSushi}, baseBackFromUni: ${baseBackFromUni}, grossProfit: ${grossProfit2}, netProfit: ${netProfit2}`);
+    console.log(`[DEBUG] ${base}/${quote} | [Pancake->Uni] baseStart: ${baseStart}, quoteFromPancake: ${quoteFromPancake}, baseBackFromUni: ${baseBackFromUni}, grossProfit: ${grossProfit2}, netProfit: ${netProfit2}`);
 
     // Spread calculation (for info)
-    const spread = Math.abs(uniPrice - sushiPrice) / ((uniPrice + sushiPrice) / 2);
+    const spread = Math.abs(uniPrice - pancakePrice) / ((uniPrice + pancakePrice) / 2);
 
     if (!isNaN(netProfit1) && netProfit1 > MIN_NET_PROFIT) {
-      const msg = `[OPPORTUNITY] ${base}/${quote} Uniswap -> SushiSwap | Net Profit: ${(netProfit1 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
+      const msg = `[OPPORTUNITY] ${base}/${quote} Uniswap -> PancakeSwap | Net Profit: ${(netProfit1 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
     if (!isNaN(netProfit2) && netProfit2 > MIN_NET_PROFIT) {
-      const msg = `[OPPORTUNITY] ${base}/${quote} SushiSwap -> Uniswap | Net Profit: ${(netProfit2 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
+      const msg = `[OPPORTUNITY] ${base}/${quote} PancakeSwap -> Uniswap | Net Profit: ${(netProfit2 * 100).toFixed(3)}% | Spread: ${(spread * 100).toFixed(3)}%`;
       console.log(msg);
       logToFile(msg);
     }
@@ -204,14 +261,20 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
 async function filterExistingPairs(provider: ethers.providers.Provider, pairs: Pair[]): Promise<Pair[]> {
   const checked: Pair[] = [];
   for (const pair of pairs) {
-    let poolUni = null, poolSushi = null;
+    let poolUni = null, poolPancake = null;
     try {
-      poolUni = await getPoolAddress(provider, FACTORY_ADDRESSES.uniswap, TOKENS[pair.base], TOKENS[pair.quote], FEE);
+      const uniResult = await getFirstAvailableUniswapPool(provider, FACTORY_ADDRESSES.uniswap, TOKENS[pair.base], TOKENS[pair.quote]);
+      poolUni = uniResult.pool;
     } catch { }
     try {
-      poolSushi = await getPoolAddress(provider, FACTORY_ADDRESSES.sushiswap, TOKENS[pair.base], TOKENS[pair.quote], FEE);
+      const pancakeResult = await getFirstAvailablePool(provider, FACTORY_ADDRESSES.pancakeswap, TOKENS[pair.base], TOKENS[pair.quote]);
+      poolPancake = pancakeResult.pool;
     } catch { }
-    if (poolUni || poolSushi) checked.push(pair);
+    if (poolUni || poolPancake) {
+      checked.push(pair);
+    } else {
+      console.log(`[INFO] Pair supprimée (aucun pool trouvé sur Uniswap ni PancakeSwap): ${pair.base}/${pair.quote}`);
+    }
   }
   return checked;
 }

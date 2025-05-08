@@ -27,6 +27,7 @@
     "ts-node": "^10.9.2"
   },
   "dependencies": {
+    "@0xsequence/multicall": "^1.10.15",
     "@aave/contract-helpers": "^1.33.1",
     "@aave/core-v3": "^1.19.3",
     "@ethersproject/address": "^5.8.0",
