@@ -177,7 +177,7 @@ async function getPoolPrice(provider: ethers.providers.Provider, pool: string) {
   return { token0, token1, price, decimals0, decimals1 };
 }
 
-import { logToFile } from "./arbitrage-logger.ts";
+import { logToFile, logTradeToFile } from "./arbitrage-logger.ts";
 
 const MIN_LIQUIDITY_USD = 100000; // Minimum de liquidité en USD (modifiable)
 
@@ -191,8 +191,12 @@ async function getPoolLiquidity(provider: ethers.providers.Provider, pool: strin
   return Number(ethers.utils.formatUnits(raw, decimals));
 }
 
+// --- Global trading lock ---
+let isTrading = false;
+
 // --- Ajout : fonction pour lancer un arbitrage ---
-async function launchArbitrage({ direction, base, quote, poolUni, poolPancake, uniFee, pancakeFee, uniPrice, pancakePrice }: any): Promise<boolean> {
+// profitEstimate is a new optional argument
+async function launchArbitrage({ direction, base, quote, poolUni, poolPancake, uniFee, pancakeFee, uniPrice, pancakePrice, profitEstimate }: any): Promise<boolean> {
   try {
     // ABI déjà importée en haut du fichier via import artifact ...
     const arbitrageurAddress = process.env.ARBITRAGEUR_ADDRESS;
@@ -308,9 +312,24 @@ async function launchArbitrage({ direction, base, quote, poolUni, poolPancake, u
       router2,
       { gasLimit: 3_000_000 }
     );
-    console.log(`[ARBITRAGE] TX envoyée: ${tx.hash}`);
+    console.log(`[ARBITRAGE][TX SENT] Hash: ${tx.hash}`);
+    // Wait for confirmation
     const receipt = await tx.wait();
-    console.log(`[ARBITRAGE] TX minée: ${receipt.transactionHash}`);
+    if (receipt && receipt.status === 1) {
+      console.log(`[ARBITRAGE][TX SUCCESS] Hash: ${tx.hash}`);
+      // Log successful trade
+      logTradeToFile({
+        direction,
+        base,
+        quote,
+        txHash: tx.hash,
+        profitEstimate: typeof profitEstimate !== 'undefined' ? profitEstimate : 0
+      });
+    } else {
+      console.error(`[ARBITRAGE][TX FAILURE] Hash: ${tx.hash}`);
+    }
+    // Unlock trading after confirmation (success or failure)
+    isTrading = false;
     return true;
   } catch (err) {
     // Improved error logging: log all possible fields
@@ -431,6 +450,8 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
       console.log(msg);
       logToFile(msg);
       if (!arbitrageLaunched) {
+        // Lock trading before launching a trade
+        isTrading = true;
         arbitrageLaunched = await launchArbitrage({
           direction: 0, // Uniswap -> PancakeSwap
           base,
@@ -440,11 +461,13 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
           uniFee,
           pancakeFee,
           uniPrice,
-          pancakePrice
+          pancakePrice,
+          profitEstimate: netProfit1
         });
         if (arbitrageLaunched) {
           console.log(`[PAUSE] Pause de 60s après arbitrage...`);
           await new Promise(r => setTimeout(r, 60000));
+          break; // Stoppe la boucle dès qu'un arbitrage est lancé
         }
       }
     }
@@ -454,6 +477,8 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
       console.log(msg);
       logToFile(msg);
       if (!arbitrageLaunched) {
+        // Lock trading before launching a trade
+        isTrading = true;
         arbitrageLaunched = await launchArbitrage({
           direction: 1, // PancakeSwap -> Uniswap
           base,
@@ -463,11 +488,13 @@ async function scanArbitrage(provider: ethers.providers.Provider, pairs: Pair[])
           uniFee,
           pancakeFee,
           uniPrice,
-          pancakePrice
+          pancakePrice,
+          profitEstimate: netProfit2
         });
         if (arbitrageLaunched) {
           console.log(`[PAUSE] Pause de 60s après arbitrage...`);
           await new Promise(r => setTimeout(r, 60000));
+          break; // Stoppe la boucle dès qu'un arbitrage est lancé
         }
       }
     }
