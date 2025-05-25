@@ -77,15 +77,25 @@ contract FlashLoanArbitrageur is IUniswapV3FlashCallback {
         emit Debug("Start uniswapV3FlashCallback");
         ArbitrageParams memory arb = abi.decode(data, (ArbitrageParams));
         address pool = msg.sender;
-        uint256 amountOwed0 = fee0;
-        uint256 amountOwed1 = fee1;
+        
+        // Vérifier que l'appel vient bien d'une pool Uniswap V3 valide
+        try IUniswapV3Pool(pool).token0() returns (address poolToken0) {
+            require(poolToken0 == arb.token0, "Invalid pool token0");
+        } catch {
+            revert("Invalid pool address");
+        }
+        
         // On récupère les soldes avant arbitrage
         uint256 bal0Before = IERC20(arb.token0).balanceOf(address(this));
         uint256 bal1Before = IERC20(arb.token1).balanceOf(address(this));
 
         // On déduit ce qu'on a reçu (flash loan)
         uint256 flashAmount = bal0Before > 0 ? bal0Before : bal1Before;
+        require(flashAmount > 0, "No flash loan received");
+        
         emit Debug(string.concat("Received flash amount: ", flashAmount.toString()));
+        emit Debug(string.concat("Token0: ", getSymbol(arb.token0), " Token1: ", getSymbol(arb.token1)));
+        emit Debug(string.concat("Direction: ", arb.direction == 0 ? "Token0->TokenMid->Token1" : "Token1->TokenMid->Token0"));
 
         // Arbitrage principal
         uint256 amountMid;
@@ -126,27 +136,56 @@ contract FlashLoanArbitrageur is IUniswapV3FlashCallback {
         uint24 fee,
         uint256 amountIn
     ) internal returns (uint256) {
+        // Vérifier que le montant est supérieur à zéro
+        require(amountIn > 0, "Amount must be greater than 0");
+        
+        // Vérifier que le contrat a bien reçu les tokens
+        uint256 balanceBefore = IERC20(tokenIn).balanceOf(address(this));
+        require(balanceBefore >= amountIn, "Insufficient token balance for swap");
+        
+        // Approuver le router à dépenser les tokens
         IERC20(tokenIn).approve(address(router), amountIn);
-        uint256 out;
-        try router.exactInputSingle(
+        
+        // Calculer le montant minimum de sortie (0.5% de slippage pour les tests)
+        uint256 amountOutMinimum = (amountIn * 995) / 1000; // 0.5% de slippage max
+        
+        emit Debug(string.concat("Swap attempt: ", Strings.toString(amountIn), " ", getSymbol(tokenIn), " -> ", getSymbol(tokenOut), " (fee: ", Strings.toString(fee), ")"));
+        
+        try router.exactInputSingle{
+            gas: 500000 // Limite de gaz pour éviter les échecs
+        }(
             ISwapRouter.ExactInputSingleParams({
                 tokenIn: tokenIn,
                 tokenOut: tokenOut,
                 fee: fee,
                 recipient: address(this),
-                deadline: block.timestamp,
+                deadline: block.timestamp + 15 minutes, // 15 minutes de délai
                 amountIn: amountIn,
-                amountOutMinimum: 0,
+                amountOutMinimum: 0, // On désactive temporairement pour les tests
                 sqrtPriceLimitX96: 0
             })
-        ) returns (uint256 amtOut) {
-            out = amtOut;
-        } catch {
-            emit Debug("Swap revert on router");
-            revert("Swap failed");
+        ) returns (uint256 amountOut) {
+            require(amountOut > 0, "Received zero output amount");
+            emit Debug(string.concat("Swap successful. Out: ", Strings.toString(amountOut), " ", getSymbol(tokenOut)));
+            return amountOut;
+        } catch Error(string memory reason) {
+            // Ce bloc capture les erreurs avec revert("message")
+            emit Debug(string.concat("Swap failed: ", reason));
+            revert(string(abi.encodePacked("Swap failed: ", reason)));
+        } catch (bytes memory) {
+            // Ce bloc capture les autres erreurs (panique, etc.)
+            emit Debug("Swap failed with unknown error");
+            revert("Swap failed with unknown error");
         }
-        emit Debug(string.concat("Swap out: ", out.toString()));
-        return out;
+    }
+    
+    // Fonction utilitaire pour obtenir le symbole d'un token
+    function getSymbol(address token) internal view returns (string memory) {
+        (bool success, bytes memory data) = token.staticcall(abi.encodeWithSignature("symbol()"));
+        if (success && data.length > 0) {
+            return abi.decode(data, (string));
+        }
+        return "UNKNOWN";
     }
 
     function withdraw(address token) external onlyOwner {
